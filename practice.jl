@@ -1,45 +1,130 @@
 using GLMakie
+using LinearAlgebra
 
-function start_visual_app()
-    # 1. 'size' is correct
-    fig = Figure(size = (1000, 800))
-    
-    ax = Axis(fig[1, 1], title = "Interactive Sine Wave", 
-              xlabel = "Time", ylabel = "Amplitude")
-    
-    
-    frequency = Observable(1.0)
-    x = range(0, 10, length=1000)
-    y = lift(frequency) do f
-        return sin.(f .* x)
-    end
+# --- 1. Shape Definitions ---
+abstract type Shape end
 
-    sl = Slider(fig[2, 1], range = 0.1:0.1:10.0, startvalue = 1.0)
-        connect!(frequency, sl.value)
-
-    # Layout: Put buttons in a column to the right of the plot and slider
-    commandlabels = ["Option A", "Option B", "Option C"] 
-    CommandButtonGrid = fig[1:2, 2] = GridLayout(width=200)
-
-    # 2. FIXED: Changed 'textsize' to 'fontsize'
-    commandbuttons = [Button(fig, label=l, tellheight=false, width=150, 
-                      buttoncolor=:red, fontsize=20) for l in commandlabels]
-    
-    # Place buttons in the grid
-    CommandButtonGrid[1:3, 1] = commandbuttons
-
-    lines!(ax, x, y, color = :blue, linewidth = 3)
-
-    
-
-    return fig
+struct Ball <: Shape
+    name::String
+    color::Symbol
 end
 
-# 1. Create the figure object
-my_fig = start_visual_app()
+struct Square <: Shape
+    name::String
+    color::Symbol
+end
 
-# 2. Display the figure and capture the 'screen'
-screen = display(my_fig)
+struct Triangle <: Shape
+    name::String
+    color::Symbol
+end
 
-# 3. Wait on the screen object
-wait(screen)
+# --- 2. Multiple Dispatch Collision Logging ---
+collide(a::Ball, b::Ball)     = "[Circle] LOG: $(a.name) and $(b.name) had an elastic collision."
+collide(a::Square, b::Square) = "[Square] LOG: $(a.name) and $(b.name) clanked together!"
+collide(a::Ball, b::Square)   = "[Mixed] LOG: $(a.name) bounced off the flat side of $(b.name)."
+collide(a::Triangle, b::Shape) = "[Alert] LOG: $(a.name) poked $(b.name) with a vertex!"
+collide(a::Shape, b::Shape)   = "[Misc] LOG: Generic collision: $(a.name) + $(b.name)."
+
+# --- 3. Simulation Setup ---
+const N = 6  
+const RADIUS = 40.0
+const DT = 0.1
+const CANVAS_SIZE = 600.0
+
+types = [Ball("Ball_$i", :skyblue) for i in 1:2] ∪ 
+        [Square("Box_$i", :tomato) for i in 1:2] ∪ 
+        [Triangle("Tri_$i", :limegreen) for i in 1:2]
+
+positions = Observable([Point2f(rand(100:500), rand(100:500)) for _ in 1:N])
+velocities = [20.0 .* randn(Point2f) for _ in 1:N]
+log_text = Observable("--- Collision Terminal ---\nReady for impact...")
+
+# --- 4. The Interactive GUI ---
+fig = Figure(size = (1000, 700))
+
+# THE FIX: Lock the view directly in the Axis creation
+ax = Axis(fig[1, 1], 
+    limits = (0, CANVAS_SIZE, 0, CANVAS_SIZE), 
+    title = "Julia Multiple Dispatch Physics",
+    aspect = DataAspect(),
+    xpanlock = true, 
+    ypanlock = true, 
+    xzoomlock = true, 
+    yzoomlock = true,
+    xrectzoom = false,
+    yrectzoom = false
+)
+
+terminal_box = Label(fig[1, 2], log_text, tellheight=false, width=350, 
+                     halign=:left, justification=:left, word_wrap=true)
+
+for i in 1:N
+    m = types[i] isa Ball ? :circle : (types[i] isa Square ? :rect : :utriangle)
+    scatter!(ax, lift(p -> p[i], positions), marker=m, markersize=RADIUS*2, color=types[i].color)
+end
+
+# --- 5. Interaction: Dragging ---
+selected_idx = Ref{Int}(0)
+
+on(events(ax.scene).mousebutton) do event
+    if event.action == Mouse.press
+        # THE FIX: use mouseposition helper and force it to Point2f
+        m_pos = Point2f(mouseposition(ax.scene)) 
+        for i in 1:N
+            if norm(positions[][i] - m_pos) < RADIUS
+                selected_idx[] = i
+            end
+        end
+    elseif event.action == Mouse.release
+        selected_idx[] = 0
+    end
+end
+
+# --- 6. Physics Loop ---
+function update_physics!()
+    pos = positions[]
+    new_pos = copy(pos)
+    
+    for i in 1:N
+        if i == selected_idx[]
+            # Follow mouse if dragged
+            new_pos[i] = Point2f(mouseposition(ax.scene))
+            continue
+        end
+
+        new_pos[i] += velocities[i] * DT
+
+        # Wall Bounces
+        if new_pos[i][1] < RADIUS || new_pos[i][1] > CANVAS_SIZE - RADIUS
+            velocities[i] = Point2f(-velocities[i][1], velocities[i][2])
+            new_pos[i] = Point2f(clamp(new_pos[i][1], RADIUS, CANVAS_SIZE-RADIUS), new_pos[i][2])
+        end
+        if new_pos[i][2] < RADIUS || new_pos[i][2] > CANVAS_SIZE - RADIUS
+            velocities[i] = Point2f(velocities[i][1], -velocities[i][2])
+            new_pos[i] = Point2f(new_pos[i][1], clamp(new_pos[i][2], RADIUS, CANVAS_SIZE-RADIUS))
+        end
+
+        # Object Collisions
+        for j in (i+1):N
+            if norm(new_pos[i] - new_pos[j]) < RADIUS * 1.2
+                msg = collide(types[i], types[j])
+                current_logs = split(log_text[], "\n")
+                log_text[] = msg * "\n" * join(current_logs[1:min(end, 10)], "\n")
+                
+                v_tmp = velocities[i]
+                velocities[i] = velocities[j]
+                velocities[j] = v_tmp
+            end
+        end
+    end
+    positions[] = new_pos
+end
+
+# --- 7. Execution ---
+display(fig)
+
+@async while isopen(fig.scene)
+    update_physics!()
+    sleep(0.01)
+end
