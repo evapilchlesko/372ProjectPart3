@@ -20,7 +20,7 @@
 
 
 
-  Written Responses:
+ 
   
 =#
 using GLMakie
