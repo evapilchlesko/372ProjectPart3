@@ -1,22 +1,22 @@
 using GLMakie
 using LinearAlgebra
-
+using Colors
 # --- 1. Shape Definitions ---
 abstract type Shape end
 
 struct Ball <: Shape
     name::String
-    color::Symbol
+    color::Any
 end
 
 struct Square <: Shape
     name::String
-    color::Symbol
+    color::Any
 end
 
 struct Triangle <: Shape
     name::String
-    color::Symbol
+    color::Any
 end
 
 # --- 2. Multiple Dispatch Collision Logging ---
@@ -32,9 +32,9 @@ const RADIUS = 40.0
 const DT = 0.1
 const CANVAS_SIZE = 600.0
 
-types = [Ball("Ball_$i", :skyblue) for i in 1:2] ∪ 
-        [Square("Box_$i", :tomato) for i in 1:2] ∪ 
-        [Triangle("Tri_$i", :limegreen) for i in 1:2]
+types = [Ball("Ball_$i", :pink) for i in 1:2] ∪ 
+        [Square("Box_$i", :red) for i in 1:2] ∪ 
+    [Triangle("Tri_$i", colorant"#FBC6CF") for i in 1:2]
 
 positions = Observable([Point2f(rand(100:500), rand(100:500)) for _ in 1:N])
 velocities = [20.0 .* randn(Point2f) for _ in 1:N]
