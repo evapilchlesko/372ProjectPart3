@@ -17,11 +17,6 @@
   - Packages: GLMakie, LinearAlgebra, Colors
   - Input: No external input required (random initialization)
   - Output: Interactive GUI window displaying simulation and collision logs
-
-
-
- 
-  
 =#
 using GLMakie
 using LinearAlgebra
@@ -31,24 +26,23 @@ using Colors
 # 1. Shape Definitions
 # ------------------------------------------------------------
 # Define an abstract type `Shape` and concrete subtypes.
-# Each shape stores:
-#   - name  : identifier used in logs
-#   - color : used for visualization 
+# Using 'mutable struct' allows us to change the color field
+# dynamically during the simulation.
 # ============================================================
 
 abstract type Shape end
 
-struct Ball <: Shape
+mutable struct Ball <: Shape
     name::String
     color::Any
 end
 
-struct Square <: Shape
+mutable struct Square <: Shape
     name::String
     color::Any
 end
 
-struct Triangle <: Shape
+mutable struct Triangle <: Shape
     name::String
     color::Any
 end
@@ -63,23 +57,32 @@ end
 
 # Ball-Ball collision
 collide(a::Ball, b::Ball) =
-    "[Circle] LOG: $(a.name) and $(b.name) had an elastic collision."
+    "LOG: $(a.name) and $(b.name) bounced off eachother."
 
 # Square-Square collision
 collide(a::Square, b::Square) =
-    "[Square] LOG: $(a.name) and $(b.name) clanked together!"
+    "LOG: $(a.name) and $(b.name) clanked together!"
 
-# Ball-Square collision
-collide(a::Ball, b::Square) =
-    "[Mixed] LOG: $(a.name) bounced off the flat side of $(b.name)."
+# Ball-Square collision (SPECIAL BEHAVIOR: Swaps Colors)
+function collide(a::Ball, b::Square)
+    # Swap the colors
+    temp_color = a.color
+    a.color = b.color
+    b.color = temp_color
+    
+    return "LOG: $(a.name) and $(b.name) collided and swapped colors!"
+end
+
+# Support the reverse order for Ball-Square dispatch
+collide(a::Square, b::Ball) = collide(b, a)
 
 # Triangle interacting with any shape
 collide(a::Triangle, b::Shape) =
-    "[Alert] LOG: $(a.name) poked $(b.name) with a vertex!"
+    "LOG: $(a.name) poked $(b.name) with a vertex!"
 
 # Generic fallback for any other combination
 collide(a::Shape, b::Shape) =
-    "[Misc] LOG: Generic collision: $(a.name) + $(b.name)."
+    "LOG: Generic collision: $(a.name) + $(b.name)."
 
 # ============================================================
 # 3. Simulation Setup
@@ -97,15 +100,15 @@ const DT = 0.1             # time step for simulation updates
 const CANVAS_SIZE = 600.0  # width/height of simulation area
 
 # Create objects: 2 Balls, 2 Squares, 2 Triangles
-types = [Ball("Ball_$i", :pink) for i in 1:2] ∪ 
-        [Square("Box_$i", :red) for i in 1:2] ∪ 
-        [Triangle("Tri_$i", colorant"#FBC6CF") for i in 1:2]
+types = [Ball("Ball-$i", :pink) for i in 1:2] ∪ 
+        [Square("Square-$i", :red) for i in 1:2] ∪ 
+        [Triangle("Triangle-$i", :orange) for i in 1:2]
 
 # Random initial positions (wrapped in Observable for reactive updates)
 positions = Observable([Point2f(rand(100:500), rand(100:500)) for _ in 1:N])
 
-# Random velocities for each object
-velocities = [20.0 .* randn(Point2f) for _ in 1:N]
+# Random velocities for each object (reset to higher speed for snappier feel)
+velocities = [20.0 .* randn(Point2f) for _ in 1:N] # fused broadcasting
 
 # Text shown in the terminal panel
 log_text = Observable("--- Collision Terminal ---\nReady for impact...")
@@ -121,23 +124,28 @@ fig = Figure(size = (1000, 700))
 # Axis setup (locked to prevent zooming/panning)
 ax = Axis(fig[1, 1], 
     limits = (0, CANVAS_SIZE, 0, CANVAS_SIZE), 
-    title = "Julia Multiple Dispatch Physics",
+    title = "Final Project",
     aspect = DataAspect(),
     xpanlock = true, 
     ypanlock = true, 
     xzoomlock = true, 
     yzoomlock = true,
     xrectzoom = false,
-    yrectzoom = false
+    yrectzoom = false,
+    xgridvisible = false, 
+    ygridvisible = false
 )
+hidedecorations!(ax) # Removes numbers/ticks while keeping the border
 
 # Text box for displaying collision logs
 terminal_box = Label(fig[1, 2], log_text,
     tellheight=false,
     width=350, 
     halign=:left,
+    valign=:top,
     justification=:left,
-    word_wrap=true
+    word_wrap=true,
+    font = "monospace" 
 )
 
 # Plot each object using a marker based on its type
@@ -149,10 +157,11 @@ for i in 1:N
     # Draw object with reactive position
     scatter!(
         ax,
-        lift(p -> p[i], positions),   # updates automatically when positions change
+        lift(p -> p[i], positions),   
         marker = m,
         markersize = RADIUS * 2,
-        color = types[i].color
+        # Lift color so the plot updates when colors are swapped
+        color = lift(p -> types[i].color, positions) 
     )
 end
 
@@ -234,20 +243,34 @@ function update_physics!()
         # ------------------------
         for j in (i+1):N
             # Check if objects are close enough to collide
-            if norm(new_pos[i] - new_pos[j]) < RADIUS * 1.2
+            dist = norm(new_pos[i] - new_pos[j])
+            if dist < RADIUS * 1.2
 
-                # Generate log message using multiple dispatch
-                msg = collide(types[i], types[j])
+                # Generate log message (and swap colors via multiple dispatch)
+                msg = collide(types[i], types[j]) # multiple dispatch
 
                 # Keep recent log messages (limit to ~10 lines)
                 current_logs = split(log_text[], "\n")
-                log_text[] = msg * "\n" *
-                             join(current_logs[1:min(end, 10)], "\n")
+                header = current_logs[1]
+                history = current_logs[2:end]
+                
+                if length(history) > 10
+                    history = history[2:end]
+                end
+
+                log_text[] = header * "\n" * join(history, "\n") * "\n" * msg
 
                 # Simple collision response: swap velocities
                 v_tmp = velocities[i]
                 velocities[i] = velocities[j]
                 velocities[j] = v_tmp
+
+                # OVERLAP FIX: Push them apart so they don't trigger the log again
+                midpoint_vec = normalize(new_pos[i] - new_pos[j])
+                push_amount = (RADIUS * 1.21) - dist
+                
+                new_pos[i] += midpoint_vec * (push_amount / 2)
+                new_pos[j] -= midpoint_vec * (push_amount / 2)
             end
         end
     end
@@ -265,7 +288,7 @@ end
 
 display(fig)
 
-@async while isopen(fig.scene)
+@async while isopen(fig.scene) # macros 
     update_physics!()
-    sleep(0.01)   # controls simulation speed
+    sleep(0.01)   # Reset to 0.01 for smooth high-speed performance
 end
